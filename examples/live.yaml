@@ -1,0 +1,26 @@
+scenes:
+  museum: 1
+
+generation:
+  seed: 42
+  quality: high
+  variations:
+    architectural_styles: [neoclassical, modern, brutalist]
+    environments: [urban, forest]
+  frameworks: [blender, trimesh]
+  llm:
+    mode: live
+    response_format: json_object
+    concurrency: 3
+    requests_per_minute: 20
+    retries: 3
+    timeout: 60
+  assets:
+    mode: polyhaven
+    cache_dir: .cache/scene-generator/assets
+    max_download_bytes: 30000000
+    max_assets: 3
+    required: false
+  output:
+    format: glb
+    preview: true

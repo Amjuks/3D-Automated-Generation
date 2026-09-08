@@ -1,0 +1,12 @@
+CREATE TABLE IF NOT EXISTS runs(id TEXT PRIMARY KEY, config TEXT NOT NULL, status TEXT NOT NULL, stage TEXT NOT NULL, started REAL NOT NULL, ended REAL, error TEXT);
+CREATE TABLE IF NOT EXISTS scenes(id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES runs(id), category TEXT NOT NULL, ordinal INTEGER NOT NULL, seed INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'pending', stage TEXT NOT NULL DEFAULT 'plan', plan TEXT, started REAL, ended REAL, error TEXT);
+CREATE TABLE IF NOT EXISTS components(id TEXT PRIMARY KEY, scene_id TEXT NOT NULL REFERENCES scenes(id), parent_id TEXT, path TEXT NOT NULL, spec_hash TEXT NOT NULL, geometry_hash TEXT, status TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, started REAL, ended REAL, stats TEXT, error TEXT);
+CREATE TABLE IF NOT EXISTS dependencies(component_id TEXT NOT NULL, dependency_id TEXT NOT NULL, PRIMARY KEY(component_id, dependency_id));
+CREATE TABLE IF NOT EXISTS llm_calls(id INTEGER PRIMARY KEY, run_id TEXT NOT NULL, scene_id TEXT NOT NULL, component_id TEXT, cache_key TEXT NOT NULL, started REAL NOT NULL, duration REAL NOT NULL, attempt INTEGER NOT NULL, prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0, cached_tokens INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0, cache_hit INTEGER NOT NULL DEFAULT 0, estimated_cost REAL, error TEXT);
+CREATE TABLE IF NOT EXISTS assets(id TEXT NOT NULL, scene_id TEXT NOT NULL, metadata TEXT NOT NULL, reused INTEGER NOT NULL, PRIMARY KEY(id, scene_id));
+CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, scene_id TEXT NOT NULL, component_id TEXT, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, kind TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS validations(id INTEGER PRIMARY KEY, scene_id TEXT NOT NULL, created REAL NOT NULL, report TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS component_scene ON components(scene_id);
+CREATE INDEX IF NOT EXISTS llm_scene ON llm_calls(scene_id, component_id);
+CREATE INDEX IF NOT EXISTS dependency_reverse ON dependencies(dependency_id);
+PRAGMA user_version=1;

@@ -1,0 +1,19 @@
+scenes:
+  museum: 10
+  mansion: 5
+
+generation:
+  seed: 42
+  quality: high
+  variations:
+    architectural_styles: [neoclassical, modern, brutalist]
+    environments: [urban, forest]
+  frameworks: [blender, trimesh]
+  llm:
+    mode: mock
+    concurrency: 4
+    requests_per_minute: 30
+  assets:
+    mode: mock
+  output:
+    format: glb

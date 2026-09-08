@@ -1,0 +1,26 @@
+scenes:
+  museum: 1
+
+generation:
+  seed: 73
+  quality: high
+  variations:
+    architectural_styles: [neoclassical, modern, brutalist]
+    environments: [forest, urban, coastal]
+  frameworks: [blender, trimesh]
+  llm:
+    mode: live
+    max_tokens: 4000
+    concurrency: 3
+    requests_per_minute: 20
+    timeout: 120
+  assets:
+    mode: polyhaven
+    max_assets: 3
+    max_download_bytes: 30000000
+  output:
+    name: museum-material-and-memory
+    format: glb
+    preview: true
+    preview_samples: 64
+    preview_width: 1440

@@ -1,0 +1,9 @@
+# One category and its requested number of variations per line.
+# Add any other categories here. Use --settings to reuse a generation config.
+museum: 1
+gallery: 1
+minecraft: 1
+park: 1
+landscape: 1
+sci-fi: 1
+futuristic-enviornment: 1

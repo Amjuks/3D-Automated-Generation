@@ -1,0 +1,27 @@
+# Any category names work; use --config examples/batch.yaml --settings this file.
+scenes:
+  bioluminescent alien wetland: 1
+
+generation:
+  workflow: creative
+  seed: 109
+  quality: high
+  frameworks: [blender, trimesh]
+  llm:
+    mode: live
+    response_format: text
+    timeout: 180
+    max_tokens: 6000
+    concurrency: 2
+    requests_per_minute: 20
+  assets:
+    mode: polyhaven
+    max_assets: 20
+    texture_resolution: 2k
+    max_download_bytes: 50000000
+    max_total_bytes: 350000000
+  output:
+    preview: true
+    require_blender: true
+    preview_samples: 128
+    preview_width: 1920

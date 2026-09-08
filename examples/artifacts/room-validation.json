@@ -1,0 +1,24 @@
+{
+  "checks": {
+    "bounds_transforms": "checked",
+    "budgets": "checked",
+    "clearance": "reserved door and straight circulation volumes",
+    "collisions": "conservative AABB broad phase",
+    "connectivity": "door graph, geometric portals, exterior reachability",
+    "dependencies": "checked",
+    "ergonomics": "template room and doorway minimums",
+    "floating": "declared supports and sockets; not a physics simulation",
+    "meshes_uv_materials": "checked"
+  },
+  "issues": [],
+  "stats": {
+    "components": 73,
+    "materials": 8,
+    "meshes": 61,
+    "texture_bytes": 0,
+    "textures": 0,
+    "triangles": 964,
+    "vertices": 2892
+  },
+  "valid": true
+}

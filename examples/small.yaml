@@ -1,0 +1,14 @@
+scenes:
+  room: 1
+
+generation:
+  seed: 42
+  quality: standard
+  frameworks: [blender, trimesh]
+  llm:
+    mode: mock
+  assets:
+    mode: mock
+  output:
+    format: glb
+    preview: true

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scene-generator"
+version = "0.1.0"
+description = "Resumable semantic-to-procedural 3D scene generation"
+requires-python = ">=3.10"
+dependencies = ["pydantic>=2.7,<3", "PyYAML>=6,<7", "numpy>=1.26,<3", "scipy>=1.11,<2", "networkx>=3,<4", "trimesh>=4.4,<5", "httpx>=0.27,<1", "python-dotenv>=1,<2", "Pillow>=10,<13"]
+
+[project.optional-dependencies]
+test = ["pytest>=8,<10", "ruff>=0.6"]
+open3d = ["open3d>=0.18"]
+
+[project.scripts]
+scene-generator = "scene_generator.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["scene_generator*"]
+
+[tool.setuptools.package-data]
+scene_generator = ["migrations/*.sql"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

@@ -1,9 +1,9 @@
 """Category-independent spatial compiler. Semantic objects arrive as assets or recipes."""
 
 import math
-import random
 
-from .decomposition import Builder
+from .builder import Builder
+from .layout import circulation_segments, object_placements, zone_layout
 from .models import Material, Socket
 from .recipes import object_key
 from .spatial import box
@@ -15,7 +15,7 @@ def compile_creative(brief, designs, recipes, assets, scene_id, seed, generation
 
     def material(name):
         if name not in tokens:
-            # A per-scene palette, not the previous global museum palette.
+            # Stable fallback colors for material names without explicit recipe colors.
             hue = stable_seed(seed, name)
             color = tuple(0.18 + ((hue >> (i * 8)) & 255) / 255 * 0.42 for i in range(3))
             colors = {
@@ -41,24 +41,8 @@ def compile_creative(brief, designs, recipes, assets, scene_id, seed, generation
         material(z.ground)
         material(z.wall)
     b = Builder(scene_id, seed, generation.quality, tokens)
-    cols = len(brief.zones) if brief.composition == "linear" else 2
-    cellw = max(z.width for z in brief.zones) + 5
-    celld = max(z.depth for z in brief.zones) + 5
-    rows = math.ceil(len(brief.zones) / cols)
-    width, depth = cols * cellw + 4, rows * celld + 4
-    if brief.composition == "freeform":
-        width = max(z.x + z.width for z in brief.zones) + 7
-        depth = max(z.y + z.depth for z in brief.zones) + 7
-        for i, z in enumerate(brief.zones):
-            for other in brief.zones[:i]:
-                if min(z.x + z.width + 1.5, other.x + other.width + 1.5) > max(z.x - 1.5, other.x - 1.5) and min(
-                    z.y + z.depth + 1.5, other.y + other.depth + 1.5
-                ) > max(z.y - 1.5, other.y - 1.5):
-                    raise ValueError(
-                        "Freeform zones overlap or leave less than 3m circulation; correct brief.json and resume"
-                    )
-    height = max(z.floors * z.floor_height for z in brief.zones) + 1
-    extent = (width, depth, height)
+    origins, extent = zone_layout(brief)
+    width, depth, height = extent
     limits = generation.dimensions
     if generation.bounding_space:
         limits = (
@@ -88,20 +72,13 @@ def compile_creative(brief, designs, recipes, assets, scene_id, seed, generation
         material(brief.terrain),
         parameters={"material_role": "environment/terrain"},
     )
-    # Continuous paths between independently allocated zones; intersections are decorative surfacing.
-    for row in range(rows):
-        b.solid(
-            root, f"promenade-{row}", (0, row * celld + 0.3, 0.2), (width, 3, 0.06), material("path"), collidable=False
-        )
-    b.solid(root, "connecting-path", (0.3, 0, 0.2), (2.5, depth, 0.06), material("path"), collidable=False)
+    if brief.circulation == "paths":
+        for i, (origin, size) in enumerate(circulation_segments(brief.zones, origins)):
+            b.solid(root, f"path-{i}", origin, size, material("path"), collidable=False)
     acquired = {r.get("target_role"): r for r in assets if r["type"] == "model"}
     coverage = []
     for zi, (zone, design) in enumerate(zip(brief.zones, designs)):
-        row, col = divmod(zi, cols)
-        shift = 1.2 * (zi % 2) if brief.composition == "staggered" else 0
-        origin = (3 + col * cellw + shift, 3.3 + row * celld, 0.2)
-        if brief.composition == "freeform":
-            origin = (3 + zone.x, 3.3 + zone.y, 0.2)
+        origin = origins[zi]
         building = b.add(
             root,
             f"zone-{zi + 1:02d}",
@@ -165,9 +142,10 @@ def compile_creative(brief, designs, recipes, assets, scene_id, seed, generation
                         material(zone.wall),
                         parameters={"material_role": f"zone-{zi + 1:02d}/wall"},
                     )
-                # Rear window band, actual glass, sill and top; no opaque wall behind glass.
+                # The brief chooses an opaque wall or an actual window opening.
                 rd = d - 3
-                for z, hh in ((0.18, 0.8), (h - 0.8, 0.68)):
+                bands = ((0.18, 0.8), (h - 0.8, 0.68)) if zone.windows else ((0.18, h - 0.3),)
+                for z, hh in bands:
                     b.solid(
                         floor,
                         f"rear-{z}",
@@ -176,46 +154,14 @@ def compile_creative(brief, designs, recipes, assets, scene_id, seed, generation
                         material(zone.wall),
                         parameters={"material_role": f"zone-{zi + 1:02d}/wall"},
                     )
-                b.solid(floor, "glazing", (0.18, rd - 0.16, 0.98), (w - 0.36, 0.08, h - 1.78), material("glass"))
-                b.solid(floor, "ceiling", (0, 0, h - 0.12), (w, rd, 0.12), material(zone.wall))
+                if zone.windows:
+                    b.solid(floor, "glazing", (0.18, rd - 0.16, 0.98), (w - 0.36, 0.08, h - 1.78), material("glass"))
+                if zone.roof or f < zone.floors - 1:
+                    b.solid(floor, "ceiling", (0, 0, h - 0.12), (w, rd, 0.12), material(zone.wall))
                 floor.reserved = [box((w / 2 - 0.9, 0.18, 0.18), (1.8, rd - 0.36, 2.4))]
                 point = tuple(a + c for a, c in zip(floor.world_transform.translation, (w / 2, 0, 0.18)))
                 b.connections.append({"from": floor.id, "to": hall.id, "width": 2, "position": point})
-            occupied = []
-            rng = random.Random(stable_seed(seed, zi, f, "placement"))
-            # Two side strips preserve an unobstructed center. Each object gets its own allocation.
-            available_depth = d - room_y - 1.5
-            requests = [(oi, spec, k) for oi, spec in enumerate(design.objects) for k in range(spec.count)]
-            per_side = math.ceil(len(requests) / 2)
-            slotd = available_depth / max(1, per_side)
-            slotw = (w - 2.8) / 2
-            for index, (oi, spec, k) in enumerate(requests):
-                side = index % 2
-                r = index // 2
-                factor = min(1, slotw / spec.width, (slotd - 0.12) / spec.depth, (h - 0.6) / spec.height)
-                if factor <= 0:
-                    raise ValueError("Object density exceeds zone allocation")
-                size = tuple(v * factor for v in (spec.width, spec.depth, spec.height))
-                x = 0.45 if side == 0 else w - 0.45 - size[0]
-                y = 0.7 + r * slotd
-                if not hall and design.arrangement != "rows":
-                    for _ in range(80):
-                        px = rng.uniform(0.3, w - size[0] - 0.3)
-                        py = rng.uniform(0.3, d - size[1] - 0.3)
-                        if design.arrangement == "perimeter":
-                            px = 0.3 if side == 0 else w - size[0] - 0.3
-                        if all(
-                            px + size[0] + 0.15 <= ox
-                            or ox + ow + 0.15 <= px
-                            or py + size[1] + 0.15 <= oy
-                            or oy + od + 0.15 <= py
-                            for ox, oy, ow, od in occupied
-                        ):
-                            x, y = px, py
-                            break
-                    else:
-                        raise ValueError("Objects do not fit without overlap; reduce zone object counts or dimensions")
-                occupied.append((x, y, size[0], size[1]))
+            for oi, spec, k, size, factor, x, y in object_placements(zone, design, f, stable_seed(seed, zi)):
                 role = f"zone-{zi + 1:02d}/object-{oi + 1:02d}"
                 obj = b.add(
                     floor,
@@ -261,7 +207,7 @@ def compile_creative(brief, designs, recipes, assets, scene_id, seed, generation
                     coverage.append(
                         {"role": role, "object": obj.id, "source": "asset", "asset": record["id"], "scale": factor}
                     )
-                else:
+                elif recipes is not None:
                     recipe = recipes[object_key(spec)]
                     for pi, part in enumerate(recipe.parts):
                         matname = f"recipe-{object_key(spec)}-{pi}"
@@ -285,6 +231,7 @@ def compile_creative(brief, designs, recipes, assets, scene_id, seed, generation
                                 "assembly_id": obj.id,
                                 "rotation_degrees": part.rotation,
                                 "surface": spec.material,
+                                "profile": part.profile,
                             },
                         )
                         partnode.budget.triangles = 50000

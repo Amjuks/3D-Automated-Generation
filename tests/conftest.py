@@ -10,6 +10,7 @@ def config(tmp_path):
             "scenes": {"room": 1},
             "generation": {
                 "workflow": "legacy",
+                "seed": 42,
                 "frameworks": ["trimesh"],
                 "llm": {"mode": "mock"},
                 "output": {"root": str(tmp_path / "runs")},

@@ -2,19 +2,19 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from .models import Bounds, Model, Vec3
 
 
 class Variations(Model):
-    architectural_styles: list[str] = Field(default_factory=lambda: ["neoclassical", "modern", "brutalist"])
-    environments: list[str] = Field(default_factory=lambda: ["urban", "forest", "coastal"])
+    architectural_styles: list[str] = Field(default_factory=list)
+    environments: list[str] = Field(default_factory=list)
 
     @field_validator("architectural_styles", "environments")
     @classmethod
     def nonempty(cls, value):
-        if not value or any(not x.strip() or len(x) > 100 for x in value):
+        if any(not x.strip() or len(x) > 100 for x in value):
             raise ValueError("variation lists must contain nonempty short strings")
         return value
 
@@ -22,11 +22,20 @@ class Variations(Model):
 class LLMConfig(Model):
     mode: Literal["live", "mock"] = "live"
     response_format: Literal["json_schema", "json_object", "text"] = "json_object"
+    temperature: float = Field(default=0.2, ge=0, le=2)
+    stream: bool = True
+    stream_usage: bool = True
     concurrency: int = Field(default=4, ge=1, le=32)
     requests_per_minute: float = Field(default=30, gt=0)
     retries: int = Field(default=3, ge=0, le=10)
     timeout: float = Field(default=60, gt=0)
-    max_tokens: int = Field(default=4000, ge=256, le=16000)
+    connect_timeout: float = Field(default=10, gt=0)
+    write_timeout: float = Field(default=30, gt=0)
+    pool_timeout: float = Field(default=5, gt=0)
+    total_timeout: float = Field(default=600, gt=0)
+    max_response_bytes: int = Field(default=2_000_000, ge=1024)
+    max_tokens: int | None = Field(default=4000, ge=256, le=16000)
+    token_limit_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
     input_cost_per_million: float | None = Field(default=None, ge=0)
     output_cost_per_million: float | None = Field(default=None, ge=0)
     cached_input_cost_per_million: float | None = Field(default=None, ge=0)
@@ -60,7 +69,7 @@ class Generation(Model):
     variations: Variations = Field(default_factory=Variations)
     frameworks: list[Literal["blender", "trimesh"]] = Field(default_factory=lambda: ["blender", "trimesh"])
     output: OutputConfig = Field(default_factory=OutputConfig)
-    seed: int = Field(default=42, ge=0, le=2**63 - 1)
+    seed: int | None = Field(default=None, ge=0, le=2**63 - 1)
     quality: Literal["draft", "standard", "high"] = "standard"
     dimensions: Vec3 | None = None
     bounding_space: Bounds | None = None
@@ -89,7 +98,14 @@ class Generation(Model):
 
 class Config(Model):
     scenes: dict[str, int]
+    scene_descriptions: dict[str, str] = Field(default_factory=dict)
     generation: Generation = Field(default_factory=Generation)
+
+    @model_validator(mode="after")
+    def descriptions_valid(self):
+        if any(k not in self.scenes or not v.strip() or len(v) > 4000 for k, v in self.scene_descriptions.items()):
+            raise ValueError("scene_descriptions must reference batch categories and contain 1-4000 characters")
+        return self
 
     @field_validator("scenes", mode="before")
     @classmethod

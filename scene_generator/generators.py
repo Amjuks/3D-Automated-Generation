@@ -18,7 +18,9 @@ def signature(component):
             "version": GENERATOR_VERSION,
             "generator": component.generator,
             "parameters": component.parameters,
-            "seed": component.seed if component.generator in {"urn", "rock", "sculpture", "tree"} else 0,
+            "seed": component.seed
+            if component.generator in {"urn", "rock", "sculpture", "tree", "organic", "bust"}
+            else 0,
             "quality": component.budget.detail,
             "size": component.bounds.size,
             "materials": [m.model_dump() for m in component.materials],
@@ -35,6 +37,10 @@ def primitive(kind, quality):
         mesh = trimesh.creation.cylinder(radius=0.5, height=1, sections=segments)
     elif kind == "sphere":
         mesh = trimesh.creation.icosphere(subdivisions={"draft": 1, "standard": 2, "high": 3}[quality])
+    elif kind == "cone":
+        mesh = trimesh.creation.cone(radius=0.5, height=1, sections=segments)
+    elif kind == "capsule":
+        mesh = trimesh.creation.capsule(radius=0.25, height=0.5, count=[segments, segments])
     elif kind == "vase":
         profile = np.array(
             [
@@ -89,10 +95,15 @@ def generate(component):
             component.parameters.get("thickness", 0.10),
             segments=24 if component.budget.detail == "draft" else 64,
         )
-    elif component.generator in {"urn", "rock", "sculpture", "torus", "tree"}:
+    elif component.generator == "lathe":
+        mesh = trimesh.creation.revolve(np.array(component.parameters["profile"]), sections=32)
+        mesh.vertices -= mesh.bounds[0]
+        mesh.vertices *= np.array(component.bounds.size) / mesh.extents
+    elif component.generator in {"urn", "rock", "sculpture", "torus", "tree", "organic", "bust"}:
         from .organic import form
 
-        mesh = form(component.generator, component.budget.detail, component.seed, component.parameters)
+        kind = {"organic": "tree", "bust": "sculpture"}.get(component.generator, component.generator)
+        mesh = form(kind, component.budget.detail, component.seed, component.parameters)
         mesh.vertices *= component.bounds.size
     else:
         mesh = primitive(component.generator, component.budget.detail).copy()
@@ -156,7 +167,9 @@ def as_mesh(component, arrays):
             )
     material = trimesh.visual.material.PBRMaterial(
         name=m.name,
-        baseColorFactor=m.color,
+        # Trimesh treats integer color arrays as bytes; a copied (1,1,1,1)
+        # otherwise exports at 1/255 brightness and opacity instead of white.
+        baseColorFactor=np.asarray(m.color, dtype=float),
         roughnessFactor=m.roughness,
         metallicFactor=m.metallic,
         emissiveFactor=[min(1, c * m.emission) for c in m.color[:3]],

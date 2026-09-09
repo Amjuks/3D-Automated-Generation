@@ -32,6 +32,24 @@ def test_blender_only_fails_with_checkpoint(config, monkeypatch):
         pipeline.close()
 
 
+def test_blender_timeout_falls_back_to_trimesh(config, monkeypatch):
+    from scene_generator.backends.blender import BlenderTimeoutError
+
+    config.generation.frameworks = ["blender", "trimesh"]
+    monkeypatch.setattr(
+        "scene_generator.backends.blender.BlenderBackend.export",
+        lambda *args: (_ for _ in ()).throw(BlenderTimeoutError("timed out")),
+    )
+    pipeline = Pipeline.create(config)
+    try:
+        assert pipeline.run()["status"] == "complete"
+        scene = next((pipeline.path / "scenes").iterdir())
+        assert read_json(scene / "export.json")["backend"] == "trimesh"
+        assert (scene / "scene.glb").exists()
+    finally:
+        pipeline.close()
+
+
 @pytest.mark.skipif(not discover_blender(), reason="Blender is optional; set BLENDER_PATH to exercise headless export")
 def test_blender_headless_glb(config):
     config.generation.frameworks = ["blender"]

@@ -1,6 +1,6 @@
 # Scene Generator
 
-A runnable Python pipeline that turns category counts into furnished, connected 3D scenes. It separates semantic design from deterministic spatial allocation and geometry, checkpoints every component, and exports one GLB per scene.
+A runnable Python pipeline that turns category counts into furnished, connected 3D scenes. It separates semantic design from seeded spatial allocation and geometry, checkpoints every component, and exports one GLB per scene.
 
 Offline mode exercises the pipeline with placeholder design data; use live mode for semantic creativity. Live design uses an OpenAI-compatible endpoint; geometry remains procedural. Blender provides headless export, PBR materials, lighting and rendered previews. Trimesh provides a portable GLB fallback.
 
@@ -53,7 +53,7 @@ python -m scene_generator export --scene runs/<id>/scenes/<scene-id> --format gl
 
 For a custom `generation.output.root`, pass `--root /path/to/runs` to `status` and `resume`, or set `SCENE_GENERATOR_HOME`. Resume uses the saved configuration and absolute paths, so changing the working directory does not change scene generation. Do not move a run and its asset cache without updating its path references.
 
-Live LLM requests print `llm_request`, `llm_success`, `llm_error`, and `llm_retry` events to stderr and save them in the run's `events.jsonl`. Validation failures include field paths and error types; HTTP failures include status codes. A single-field answer envelope or a JSON Markdown fence is unwrapped; its inner object must still validate against the same schema. A request can remain pending until the configured timeout, and `retries: 3` allows four attempts. A successful short chat request verifies connectivity, but scene generation also requires a complete response that passes the scene schema. Resume reads LLM settings from the SQLite configuration snapshot; editing the original YAML or the informational `config.json` does not change an existing run. Endpoint, model, and credentials are read from the current environment (including `.env`).
+Live LLM requests print `llm_request`, `llm_success`, `llm_error`, and `llm_retry` events to stderr and save them in the run's `events.jsonl`. Validation failures include field paths and error types; HTTP failures include status codes. A single-field answer envelope or a JSON Markdown fence is unwrapped; its inner object must still validate against the same schema. Streaming is enabled by default. Events distinguish response headers, first bytes, reasoning progress, first JSON content and schema validation without printing model text. `timeout` limits network read inactivity; `retries: 3` allows four attempts for transient failures. A long reasoning response can remain active beyond the read timeout while bytes continue to arrive. A successful short chat request verifies connectivity, but scene generation also requires a complete response that passes the scene schema. Resume reads LLM settings from the SQLite configuration snapshot; editing the original YAML or the informational `config.json` does not change an existing run. Endpoint, model, and credentials are read from the current environment (including `.env`).
 
 Exit codes: `0` success, `1` runtime failure, `2` invalid input or failed standalone validation, `130` interrupted. A failed export leaves completed geometry available for resume.
 
@@ -94,11 +94,11 @@ OPENAI_MODEL=gpt
 
 Credentials are read from the environment and never written to manifests, SQLite or logs. `.env` is gitignored. Blender child processes receive no `OPENAI_*` environment variables. LLM error records contain error classes/status codes, not provider response bodies or prompts.
 
-The client uses `/chat/completions`. `json_object` is the default; the creative example uses `response_format: text` for providers whose JSON-mode decoding corrupts the output. Text mode omits the API response-format parameter but still requires a JSON answer. JSON-object requests retry in text mode after malformed structure; strict `json_schema` requests keep their explicit format. every response is still validated by Pydantic. Select `json_schema` only if your provider supports structured outputs and the supplied schemas. Provider/model availability and compatibility must be tested against your account. See the [official structured outputs documentation](https://developers.openai.com/api/docs/guides/structured-outputs).
+The client uses `/chat/completions`. `json_object` is the default; the creative example uses `response_format: text` for providers whose JSON-mode decoding corrupts the output. Text mode omits the API response-format parameter but still requires a JSON answer. JSON-object requests retry in text mode after malformed structure; strict `json_schema` requests keep their explicit format. Every response is still validated by Pydantic. Select `json_schema` only if your provider supports structured outputs and the supplied schemas. Provider/model availability and compatibility must be tested against your account. See the [official structured outputs documentation](https://developers.openai.com/api/docs/guides/structured-outputs).
 
-Only the compact scene plan and individual room design decisions require LLM calls. A room request contains its contract, a small neighbor description, selected design tokens and its seed. It never contains the complete scene. Model-generated code is never executed.
+Creative runs request one scene brief, one design per zone, and one recipe per distinct unresolved object design. Acquired models and zero-count objects need no recipe calls. Zone and recipe requests include a derived seed and compact relevant context. Recipe identity includes material, dimensions, name and visual detail. Layout preflight happens before assets and object calls. Legacy runs retain their saved plan/room request flow. Model-generated code is never executed.
 
-Normalized request hashes include model, endpoint, mode, schema and input. Only valid typed responses are cached. Invalid schema responses retry the same component with compact field/type feedback. Transport retries use exponential backoff, `Retry-After`, timeouts, a request spacing limiter and a concurrency semaphore. Local cache hits incur zero provider tokens; provider cached tokens are reported separately. Mock calls report zero tokens rather than invented usage.
+Normalized request hashes include model, endpoint, mode, schema, input, validation constraints and output settings, including temperature and token limits. Only valid typed responses are cached. Invalid schema responses retry the same component with compact field/type feedback. Transport retries use jittered exponential backoff, numeric/date `Retry-After`, a request spacing limiter and a concurrency semaphore. They preserve the original prompt. Pool exhaustion, local protocol/configuration errors, serialization/cache failures, refusals and output limits do not silently consume repeated attempts. Interrupted streams are retried unless a terminal stop and a fully valid answer have already arrived. Local cache hits incur zero provider tokens; provider cached tokens are reported separately. Mock calls report zero tokens rather than invented usage.
 
 Costs remain `null` until input/output prices are configured. For example, set the following **to your provider's actual prices**, in currency units per million tokens:
 
@@ -147,6 +147,39 @@ generation:
     component_glbs: false
 ```
 
+For a richer batch, add optional descriptions keyed by the same categories:
+
+```yaml
+scenes:
+  requested place: 2
+scene_descriptions:
+  requested place: Describe the intended setting, scale, inhabitants, visual character and required objects here.
+generation:
+  seed: null                    # fresh variation per new run; use an integer to replay
+```
+
+The generic workflow accepts empty zones, zero-count objects, arbitrary material names and optional external paths. `windows` and `roof` are zone choices. Geometry operations and resource caps remain bounded; arbitrary semantic names do not promise arbitrary topology or photorealism.
+
+LLM connection controls (all optional):
+
+```yaml
+generation:
+  llm:
+    stream: true
+    stream_usage: true          # disable only for endpoints rejecting stream_options
+    temperature: 0.2
+    timeout: 180                # idle read, not total generation time
+    connect_timeout: 10
+    write_timeout: 30
+    pool_timeout: 5
+    total_timeout: 600          # checked while receiving; an in-flight read retains its idle timeout
+    max_response_bytes: 2000000 # includes streaming envelopes and reasoning traffic
+    max_tokens: 6000            # set null only when intentionally omitting the provider cap
+    token_limit_parameter: max_tokens  # or max_completion_tokens, as supported by the endpoint
+```
+
+An endpoint may return buffered JSON even when streaming is requested; that response is still validated. Unsupported options fail visibly as configuration errors. Strict JSON-schema mode converts Pydantic defaults and homogeneous tuples to the wire schema and still applies local validation. The configured provider must support that mode. See [the investigation and hardcoding audit](docs/pipeline-investigation.md).
+
 Unknown keys and unsupported formats/backends are rejected. Counts must be positive integers. All distances use meters, with Z up in contracts and Y up in GLB exports.
 
 Optional site limits:
@@ -159,11 +192,11 @@ generation:
     max: [130, 224, 6]
 ```
 
-The compiler fits room counts/proportions before placing furniture. It rejects spaces too small for the supported grammar; it does not shrink doorways or people-scale furniture to force a fit. The minimum one-room site is approximately 11 × 14 × 3.5 m including circulation and landscape margins.
+The compiler fits room counts/proportions before placing furniture. It rejects spaces too small for the supported grammar; it does not shrink doorways or people-scale furniture to force a fit. Those room-fitting minimums apply to the legacy compiler. Creative briefs are checked against site dimensions, including margins, before accepting the planning response; the current zone/building size limits are documented in `brief.py`.
 
-Scene seeds are derived from the run seed, category and ordinal; component seeds are derived from stable hierarchical IDs. Mock/procedural geometry is reproducible with the same installed dependency versions. A live LLM is not guaranteed deterministic on a cache miss. To make a new variation, create a new run with a different seed/configuration.
+Omitting `generation.seed` (or setting it to `null`) selects a fresh seed once when a run is created and persists it before any generation. An explicit integer replays a chosen variation. Scene seeds are derived from that saved run seed, category and ordinal; component seeds are derived from stable hierarchical IDs. Mock/procedural geometry is reproducible with the same installed dependency versions. A live LLM is not guaranteed deterministic on a cache miss. Resume always retains the saved seed. Live cache misses are not guaranteed to replay identical designs even with the same seed.
 
-Variations change room count, one- versus two-sided hall layout, room proportions, collections, furnishing density, environment, materials and atmosphere. The default museum batch spans sculpture, antiquities, science, art and natural-history concepts. Arbitrary style words affect semantic planning/material context; dedicated geometry details currently exist for the included architectural styles.
+Creative variations affect concept, zones, object choices, arrangements, materials and seeded placements. Style/environment preferences default to empty lists so the LLM can choose from the input; explicit lists are passed to the planner. Population uses ordinary object specs with designed dimensions and materials, including nonhuman inhabitants. Object counts apply across the zone floors unless repetition is explicitly requested. Legacy compatibility mode retains its historical style and furnishing templates.
 
 ## Blender
 
@@ -229,8 +262,11 @@ Texture files are embedded during GLB export. Manifests continue referencing the
 ```text
 scene_generator/
   config.py, models.py           typed YAML, plans and component contracts
-  llm.py, planning.py            compact typed design requests and caches
-  decomposition.py, spatial.py  parent-owned allocations and spatial index
+  llm.py, llm_transport.py       typed requests, streaming, caches and retry boundaries
+  brief.py, recipes.py          creative semantic plans and object recipes
+  creative.py, layout.py        generic allocation, placement and routed circulation
+  builder.py, spatial.py        parent-owned contracts and spatial index
+  legacy/                      isolated compatibility schemas and old template compilers
   generators.py                 reusable parametric geometry and UVs
   assets.py, polyhaven.py        asset selection, provenance and caching
   backends/                     Trimesh adapter and headless Blender worker
@@ -290,7 +326,7 @@ Repairs restore drifting allocations from their original contracts, regenerate i
 | Scale/budgets | Template room/door ergonomics, component/scene triangles and aggregate encoded texture bytes |
 | Export | GLB reload and nonempty geometry; Blender process status and output existence |
 
-AABB checks can reject valid concave interlocking shapes. They are not an exact triangle collision engine. Manifold checks do not establish absence of all self-intersections. Support checking is not rigid-body physics and does not prove stability of every furniture part or wall mount. Path checks assume the generated straight-hall layout; there is no general navmesh solver, stairs/elevators, multi-storey routing, building-code certification or arbitrary rotations. Texture budgets measure encoded file bytes, not GPU memory. Detailed per-material performance tuning and photorealistic art direction require additional authored generators/assets.
+AABB checks can reject valid concave interlocking shapes. They are not an exact triangle collision engine. Manifold checks do not establish absence of all self-intersections. Support checking is not rigid-body physics and does not prove stability of every furniture part or wall mount. Indoor path checks use reserved aisles and a door graph. Creative buildings include bounded stair/landing geometry, and optional exterior paths route around actual zone footprints. There is no general navmesh solver, elevator simulation, building-code certification or arbitrary allocation rotation. Texture budgets measure encoded file bytes, not GPU memory. Detailed per-material performance tuning and photorealistic art direction require additional authored generators/assets.
 
 The adapter protocol supports future USD/engine exporters. Open3D is an optional installation extra for downstream processing; there is no Open3D backend or automatic Open3D pipeline stage in this version. Unsupported adapters/formats are rejected explicitly.
 

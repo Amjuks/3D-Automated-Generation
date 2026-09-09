@@ -16,7 +16,7 @@ from .statistics import run_summary
 
 def main(argv=None):
     load_dotenv()
-    parser = argparse.ArgumentParser(description="Generate deterministic, resumable 3D scenes")
+    parser = argparse.ArgumentParser(description="Generate creative, resumable 3D scenes with reproducible seeds")
     sub = parser.add_subparsers(dest="command", required=True)
     generate = sub.add_parser("generate")
     generate.add_argument(

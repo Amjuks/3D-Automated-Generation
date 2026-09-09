@@ -58,7 +58,7 @@ def test_arbitrary_category_and_multi_floor_geometry():
     assert any("stair-1-" in n.name for n in nodes)
     assert len([n for n in nodes if n.kind == "room" and not n.parameters.get("circulation")]) == 3
     assert all("museum" not in n.id for n in nodes)
-    assert len(coverage) == 8
+    assert len(coverage) == 4  # Counts apply to the zone, not independently to every floor.
 
 
 def test_freeform_scene_changes_physical_layout():

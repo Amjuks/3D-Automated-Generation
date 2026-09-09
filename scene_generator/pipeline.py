@@ -1,4 +1,5 @@
 import json
+import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -7,13 +8,11 @@ from pathlib import Path
 from .assets import apply_assets, select_assets
 from .checkpoint import State, run_lock
 from .config import Config
-from .decomposition import decompose
-from .exporters import export_scene
+from .exporters import EXPORT_VERSION, export_scene
 from .generators import generate, load_geometry, save_geometry
 from .llm import LLM
 from .logging import Log
-from .models import Component, ScenePlan
-from .planning import plan_scene
+from .models import Component
 from .repair import repair_components
 from .statistics import run_summary, usage
 from .util import canonical, digest, file_hash, read_json, slug, stable_seed, write_json
@@ -68,6 +67,9 @@ class Pipeline:
 
     @classmethod
     def create(cls, config):
+        config = config.model_copy(deep=True)
+        if config.generation.seed is None:
+            config.generation.seed = secrets.randbits(63)
         categories = "-".join(f"{slug(k)}-{v}" for k, v in config.scenes.items())[:65]
         base = (
             slug(config.generation.output.name)
@@ -97,10 +99,13 @@ class Pipeline:
             (run_id, config.model_dump_json(), "pending", "plan", time.time()),
         )
         used_categories = set()
-        for index, (category, count) in enumerate(config.scenes.items()):
-            category_name = slug(category)
-            if category_name in used_categories:
-                category_name += f"-{index + 1}"
+        for category, count in config.scenes.items():
+            category_base = slug(category)
+            category_name = category_base
+            suffix = 2
+            while category_name in used_categories:
+                category_name = f"{category_base}-{suffix}"
+                suffix += 1
             used_categories.add(category_name)
             for ordinal in range(count):
                 scene_id = f"{category_name}-{ordinal + 1:02d}"
@@ -219,12 +224,16 @@ class Pipeline:
                 path,
                 self.log,
                 previous_concepts,
+                description=self.config.scene_descriptions.get(row["category"], ""),
             )
             plan = compatibility_plan(brief, row["category"])
             requests = design_asset_requests(brief, designs)
             write_json(path / "asset-requests.json", requests)
             self.state.execute("UPDATE scenes SET plan=? WHERE id=?", (plan.model_dump_json(), sid))
         else:
+            from .legacy.models import ScenePlan
+            from .legacy.planning import plan_scene
+
             self.stage(sid, "plan")
             if row["plan"]:
                 plan = ScenePlan.model_validate_json(row["plan"])
@@ -232,6 +241,12 @@ class Pipeline:
                 plan = plan_scene(row["category"], row["ordinal"], row["seed"], self.generation, self.llm, sid)
                 self.state.execute("UPDATE scenes SET plan=? WHERE id=?", (plan.model_dump_json(), sid))
         write_json(path / "plan.json", plan.model_dump(mode="json"))
+        if creative and not (path / "scene.json").exists():
+            from .creative import compile_creative
+
+            # Validate allocations before downloading assets or paying for object recipes.
+            self.stage(sid, "layout")
+            compile_creative(brief, designs, None, [], sid, row["seed"], self.generation)
         self.stage(sid, "assets")
         assets = select_assets(self.generation.assets, plan, path, self.log, requests=requests, seed=row["seed"])
         for asset in assets:
@@ -262,7 +277,17 @@ class Pipeline:
                 from .recipes import design_recipes
 
                 self.stage(sid, "objects")
-                recipes = design_recipes(designs, self.llm, sid, path, self.log, assets)
+                recipes = design_recipes(
+                    designs,
+                    self.llm,
+                    sid,
+                    path,
+                    self.log,
+                    assets,
+                    seed=row["seed"],
+                    brief=brief,
+                    quality=self.generation.quality,
+                )
                 nodes, connections, tokens, coverage = compile_creative(
                     brief, designs, recipes, assets, sid, row["seed"], self.generation
                 )
@@ -275,10 +300,12 @@ class Pipeline:
                     },
                 )
             else:
+                from .legacy.decomposition import decompose
+
                 nodes, connections, tokens = decompose(
                     plan, sid, row["seed"], self.generation, self.llm, path / "room-designs"
                 )
-            apply_assets(nodes, assets)
+            apply_assets(nodes, assets, legacy=not creative)
             from .surfaces import texture_scene
 
             texture_scene(nodes, self.generation.output.root / ".surface-cache", self.generation.quality)
@@ -343,6 +370,7 @@ class Pipeline:
         export = read_json(export_report) if export_report.exists() else None
         fingerprint = digest(
             {
+                "export_version": EXPORT_VERSION,
                 "components": [spec_hash(n) for n in nodes],
                 "generation": self.generation.model_dump(mode="json"),
                 "assets": [(a["id"], a["sha256"]) for a in assets],
@@ -367,6 +395,16 @@ class Pipeline:
             write_json(export_report, export)
         if creative:
             coverage = read_json(path / "asset-coverage.json")
+            by_id = {n.id: n for n in nodes}
+            for entry in coverage["objects"]:
+                obj = by_id.get(entry["object"])
+                if obj:
+                    repairs = [
+                        by_id[c].parameters["repair"] for c in obj.child_ids if by_id[c].parameters.get("repair")
+                    ]
+                    if repairs:
+                        entry.update(source="placeholder", repairs=repairs)
+            write_json(path / "asset-coverage.json", coverage)
             write_json(
                 path / "quality.json",
                 {
@@ -379,6 +417,7 @@ class Pipeline:
                     ),
                     "asset_instances": sum(o["source"] == "asset" for o in coverage["objects"]),
                     "recipe_instances": sum(o["source"] == "recipe" for o in coverage["objects"]),
+                    "placeholder_instances": sum(o["source"] == "placeholder" for o in coverage["objects"]),
                     "scaled_objects": sum(o["scale"] < 0.99 for o in coverage["objects"]),
                     "unfulfilled_asset_requests": len(coverage["unfulfilled_requests"]),
                     "limitations": export.get("limitations", [])
@@ -390,6 +429,9 @@ class Pipeline:
                 },
             )
             self.record_file(sid, path / "scene.md", "design_brief")
+            self.record_file(sid, path / "asset-coverage.json", "manifest")
+            self.record_file(sid, path / "quality.json", "manifest")
+        self.record_file(sid, export_report, "manifest")
         self.record_file(sid, Path(export["path"]), "export")
         for preview in path.glob("*.png"):
             self.record_file(sid, preview, "preview")
@@ -527,7 +569,15 @@ def _export_project(path, fmt):
     report = _validate_project(path)
     if not report.valid:
         raise RuntimeError("validation failed; repair with resume before exporting")
-    plan = ScenePlan.model_validate(read_json(path / "plan.json"))
+    data = read_json(path / "plan.json")
+    if data.get("workflow") == "creative":
+        from .brief import SceneSummary
+
+        plan = SceneSummary.model_validate(data)
+    else:
+        from .legacy.models import ScenePlan
+
+        plan = ScenePlan.model_validate(data)
     assets = read_json(path / "assets.json")
     result = export_scene(
         path,

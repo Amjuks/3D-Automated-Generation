@@ -131,6 +131,21 @@ def test_selective_contract_repair(config):
         pipeline.close()
 
 
+def test_texture_budget_repair_drops_texture_maps(config):
+    config.generation.max_texture_bytes = 0
+    path, result = run(config)
+    assert result["status"] == "complete"
+    scene = next((path / "scenes").iterdir())
+    assert validate_project(scene).valid
+    _, nodes, _ = load_scene(scene)
+    assert all(
+        not texture
+        for node in nodes
+        for material in node.materials
+        for texture in (material.base_color_texture, material.roughness_texture, material.normal_texture)
+    )
+
+
 def test_minimum_site_and_wall_mount_check(config):
     config.generation.dimensions = (11, 14, 3.5)
     path, _ = run(config)

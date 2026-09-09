@@ -6,6 +6,10 @@ from pathlib import Path
 from ..util import read_json, write_json
 
 
+class BlenderTimeoutError(RuntimeError):
+    pass
+
+
 def discover_blender():
     configured = os.getenv("BLENDER_PATH")
     if configured:
@@ -65,7 +69,7 @@ class BlenderBackend:
                     check=False,
                 )
             except subprocess.TimeoutExpired:
-                raise RuntimeError("Blender timed out; export can be resumed") from None
+                raise BlenderTimeoutError("Blender timed out; export can be resumed") from None
         if process.returncode or not destination.exists():
             raise RuntimeError("Blender export failed; see scene blender.log")
         return read_json(scene_path / "blender-stats.json")

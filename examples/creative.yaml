@@ -4,12 +4,14 @@ scenes:
 
 generation:
   workflow: creative
-  seed: 109
+  seed: null  # A new saved seed per run; set an integer for reproducible variations.
   quality: high
   frameworks: [blender, trimesh]
+  blender_timeout: 1800
   llm:
     mode: live
     response_format: text
+    stream: true
     timeout: 180
     max_tokens: 6000
     concurrency: 2
@@ -23,5 +25,5 @@ generation:
   output:
     preview: true
     require_blender: true
-    preview_samples: 128
-    preview_width: 1920
+    preview_samples: 32
+    preview_width: 1280

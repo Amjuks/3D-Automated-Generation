@@ -8,7 +8,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from .util import atomic_write, digest, stable_seed
 
-SURFACE_VERSION = 2
+SURFACE_VERSION = 3
 
 
 def png(path, array):
@@ -75,7 +75,6 @@ def print_texture(path, text, seed, artwork=False):
 
         for index, line in enumerate(textwrap.wrap(text, width=26)[:6]):
             draw.text((35, 95 + index * 42), line, fill=(35, 36, 32), font=font(25))
-        draw.text((35, 425), "COLLECTION  /  MUSEUM", fill=(96, 94, 83), font=font(17))
         buf = io.BytesIO()
         canvas.save(buf, format="PNG")
         atomic_write(path, buf.getvalue())
@@ -114,9 +113,9 @@ def texture_scene(nodes, cache, quality):
         color_path, rough_path, normal_path = (directory / f"{name}.png" for name in ("color", "roughness", "normal"))
         if printable:
             if not color_path.exists():
-                print_texture(color_path, node.parameters.get("text", "Selected works"), node.seed, motif == "artwork")
+                print_texture(color_path, node.parameters.get("text", node.name), node.seed, motif == "artwork")
             modified = mat.model_copy(
-                update={"color": (1, 1, 1, 1), "base_color_texture": str(color_path), "texture_scale": 1}
+                update={"color": (1.0, 1.0, 1.0, 1.0), "base_color_texture": str(color_path), "texture_scale": 1}
             )
         else:
             if not all(p.exists() for p in (color_path, rough_path, normal_path)):
@@ -156,7 +155,7 @@ def texture_scene(nodes, cache, quality):
                 png(normal_path, (normal * 0.5 + 0.5) * 255)
             modified = mat.model_copy(
                 update={
-                    "color": (1, 1, 1, 1),
+                    "color": (1.0, 1.0, 1.0, 1.0),
                     "base_color_texture": str(color_path),
                     "roughness_texture": str(rough_path),
                     "normal_texture": str(normal_path),

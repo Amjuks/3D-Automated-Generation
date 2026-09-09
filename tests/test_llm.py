@@ -48,6 +48,8 @@ def test_typed_retry_usage_and_cache(tmp_path, monkeypatch, capsys):
         b = client.request(RoomDesign, {"room": "a"}, "scene", "component")
         assert a == b
         assert len(calls) == 2
+        assert calls[0]["temperature"] == 0.2
+        assert calls[0]["max_tokens"] == cfg.max_tokens
         assert "validation_feedback" in calls[1]["messages"][1]["content"]
         rows = state.rows("SELECT * FROM llm_calls")
         assert sum(r["total_tokens"] for r in rows) == 240

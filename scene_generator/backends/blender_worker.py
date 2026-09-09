@@ -40,12 +40,12 @@ def main():
                     uv = data.uv_layers.new(name="UVMap")
                     for loop in data.loops:
                         uv.data[loop.index].uv = arrays["uv"][loop.vertex_index]
-                # Weld coincident vertices after assigning per-loop UVs, then smooth curved surfaces.
-                bm = bmesh.new()
-                bm.from_mesh(data)
-                bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=1e-7)
-                bm.to_mesh(data)
-                bm.free()
+                if node["generator"] in {"asset", "sculpture", "organic", "tree", "rock"}:
+                    bm = bmesh.new()
+                    bm.from_mesh(data)
+                    bmesh.ops.remove_doubles(bm, verts=list(bm.verts), dist=1e-7)
+                    bm.to_mesh(data)
+                    bm.free()
                 for polygon in data.polygons:
                     polygon.use_smooth = node["generator"] not in {"box", "asset"}
                 mat = node["materials"][0]

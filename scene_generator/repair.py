@@ -30,6 +30,31 @@ def repair_components(nodes, report, paths):
             replacement.budget.detail = "draft"
             by_id[identity] = replacement
             changed.add(identity)
+        if "texture_budget" in codes:
+            for node in nodes:
+                if not any(
+                    texture
+                    for material in node.materials
+                    for texture in (
+                        material.base_color_texture,
+                        material.roughness_texture,
+                        material.normal_texture,
+                    )
+                ):
+                    continue
+                replacement = node.model_copy(deep=True)
+                replacement.materials = [
+                    material.model_copy(
+                        update={
+                            "base_color_texture": None,
+                            "roughness_texture": None,
+                            "normal_texture": None,
+                        }
+                    )
+                    for material in replacement.materials
+                ]
+                by_id[node.id] = replacement
+                changed.add(node.id)
     # Only transitive dependents can be affected by a changed contract.
     invalidated = set(changed)
     while True:

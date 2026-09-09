@@ -61,30 +61,12 @@ def select_assets(config, plan, scene_path, log, requests=None, seed=0):
     if config.mode == "polyhaven":
         log.event("asset_credit", credit=CREDIT)
         client = PolyHaven(config.cache_dir, config.offline, config.max_download_bytes)
-        queries = [
-            ("texture", "floor parquet wood" if plan.atmosphere in {"warm", "daylight"} else "floor marble stone"),
-            (
-                "hdri",
-                {
-                    "urban": "city street outdoor",
-                    "forest": "forest woods outdoor",
-                    "coastal": "beach coast outdoor",
-                }.get(plan.environment, plan.environment),
-            ),
-            (
-                "model",
-                {
-                    "antiquities": "vase pottery ancient",
-                    "science": "globe instrument apparatus",
-                    "natural_history": "rock fossil specimen",
-                }.get(plan.collection, "sculpture statue bust vase"),
-            ),
-        ]
-        queries = (
-            requests
-            if requests is not None
-            else [{"type": kind, "query": query, "target_material": plan.floor_finish} for kind, query in queries]
-        )
+        if requests is None:
+            from .legacy.assets import asset_requests
+
+            queries = asset_requests(plan)
+        else:
+            queries = requests
         local_roles = {r.get("target_role") for r in records}
         if requests is not None:
             queries = [r for r in queries if r.get("target_role") not in local_roles]
@@ -227,10 +209,8 @@ def select_assets(config, plan, scene_path, log, requests=None, seed=0):
     return records
 
 
-def apply_assets(nodes, records):
+def apply_assets(nodes, records, legacy=False):
     textures = [r for r in records if r["type"] == "texture"]
-    models = [r for r in records if r["type"] == "model"]
-    used_models = set()
     for node in nodes:
         if node.materials:
             matches = [
@@ -243,29 +223,13 @@ def apply_assets(nodes, records):
                 tex = matches[node.seed % len(matches)]
                 node.materials = [
                     node.materials[0].model_copy(
-                        update={"color": (1, 1, 1, 1), "base_color_texture": tex["path"], **tex.get("maps", {})}
+                        update={"color": (1.0, 1.0, 1.0, 1.0), "base_color_texture": tex["path"], **tex.get("maps", {})}
                     )
                 ]
-        # Legacy nodes still receive assets, consuming every available model in turn.
-        if node.name == "collection-object" and node.parameters.get("asset_candidate", True):
-            candidates = [r for r in models if r["id"] not in used_models]
-            if not candidates:
-                continue
-            selected = candidates[0]
-            used_models.add(selected["id"])
-            node.generator = "asset"
-            node.parameters = {"path": selected["path"], "sha256": selected["sha256"], "asset_id": selected["id"]}
-            node.budget.triangles = max(node.budget.triangles, selected.get("triangles", 2000))
-            if selected.get("base_color_texture"):
-                from .models import Material
+    if legacy:
+        from .legacy.assets import apply_models
 
-                node.materials = [
-                    Material(
-                        name="asset-" + selected["id"],
-                        color=(1, 1, 1, 1),
-                        base_color_texture=selected["base_color_texture"],
-                    )
-                ]
+        apply_models(nodes, records)
 
 
 def design_asset_requests(brief, designs):
@@ -285,7 +249,7 @@ def design_asset_requests(brief, designs):
         queue += [
             {"type": "model", "query": o.asset_query, "target_role": prefix + f"/object-{oi + 1:02d}"}
             for oi, o in enumerate(design.objects)
-            if o.asset_query
+            if o.asset_query and o.count
         ]
         if zone.enclosure == "building":
             queue.insert(

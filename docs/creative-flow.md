@@ -30,3 +30,7 @@ Each scene writes `brief.json`, `scene.md`, `zone-designs/`, `asset-requests.jso
 
 
 The tested local endpoint sometimes corrupts `json_object` responses into malformed envelope keys. The creative profile therefore omits the provider response-format parameter (`text`) while retaining typed JSON validation. JSON-object mode also falls back to this transport after malformed structure. Single-field answer envelopes and exact Markdown JSON fences are accepted only when the inner payload passes the full requested schema.
+
+## Robustness and generic-content audit (2026-09-09)
+
+See [the investigation report](pipeline-investigation.md) for measured timeout behavior, the complete hardcoding audit and validation. The active workflow now streams LLM responses with separate transport/validation diagnostics, uses fresh persisted seeds by default, passes input descriptions and explicit preferences through planning, and keeps legacy templates in an isolated compatibility package. Population, optional circulation, openings, counts and material names are scene data. Geometry/resource limits remain explicit.

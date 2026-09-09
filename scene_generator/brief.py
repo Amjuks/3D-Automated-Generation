@@ -2,9 +2,10 @@
 
 from typing import Literal
 
-from pydantic import Field, model_validator
+from pydantic import Field, ValidationInfo, model_validator
 
-from .models import Model, ScenePlan
+from .mock_design import default_brief as default_brief
+from .models import Model
 from .util import atomic_write, read_json, stable_seed, write_json
 
 
@@ -18,9 +19,11 @@ class ZoneBrief(Model):
     width: float = Field(default=12, ge=8, le=24)
     depth: float = Field(default=12, ge=8, le=24)
     floor_height: float = Field(default=4, ge=3.5, le=40)
-    ground: str = Field(default="stone", max_length=40, pattern=r"^[a-z][a-z0-9_-]*$")
-    wall: str = Field(default="plaster", max_length=40, pattern=r"^[a-z][a-z0-9_-]*$")
-    palette: list[str] = Field(min_length=1, max_length=6)
+    ground: str = Field(default="ground", min_length=1, max_length=80)
+    wall: str = Field(default="wall", min_length=1, max_length=80)
+    palette: list[str] = Field(default_factory=list, max_length=6)
+    windows: bool = True
+    roof: bool = True
 
 
 class SceneBrief(Model):
@@ -36,10 +39,11 @@ class SceneBrief(Model):
     population_story: str = Field(max_length=240)
     population_kind: str = Field(default="inhabitant", max_length=70)
     population_query: str = Field(default="", max_length=100)
+    circulation: Literal["none", "paths"] = "paths"
     zones: list[ZoneBrief] = Field(min_length=1, max_length=6)
 
     @model_validator(mode="after")
-    def feasible_zones(self):
+    def feasible_zones(self, info: ValidationInfo):
         if any(z.enclosure == "building" and z.floor_height > 6 for z in self.zones):
             raise ValueError("Building floor heights must be <=6m; open zones can extend to 40m")
         if self.composition == "freeform":
@@ -51,19 +55,33 @@ class SceneBrief(Model):
                         raise ValueError(
                             "Freeform zones must not overlap and must leave 3m gaps; adjust their x/y positions"
                         )
+        if any(z.enclosure == "open" and z.floors != 1 for z in self.zones):
+            raise ValueError("open zones must have one floor")
+        limits = (info.context or {}).get("dimensions")
+        if limits:
+            from .layout import zone_layout
+
+            _, extent = zone_layout(self)
+            if any(a > b for a, b in zip(extent, limits)):
+                raise ValueError("zone layout and margins exceed the supplied site dimensions")
         return self
 
 
 class ObjectSpec(Model):
     name: str = Field(max_length=70)
     kind: str = Field(max_length=70)
-    count: int = Field(ge=1, le=24)
-    material: str = Field(max_length=40, pattern=r"^[a-z][a-z0-9_-]*$")
+    count: int = Field(ge=0, le=24)
+    material: str = Field(min_length=1, max_length=80)
     asset_query: str = Field(default="", max_length=100)
     detail: str = Field(max_length=220)
     width: float = Field(default=1.5, ge=0.2, le=5)
     depth: float = Field(default=1.5, ge=0.2, le=5)
     height: float = Field(default=2, ge=0.2, le=40)
+    # None distributes the requested count across floors. Old saved zone designs
+    # are upgraded to repeat explicitly so a resume does not change their meaning.
+    floor: int | None = Field(default=None, ge=0, le=2)
+    repeat_on_floors: bool = False
+    population: bool = False
 
 
 class ZoneDesign(Model):
@@ -73,39 +91,19 @@ class ZoneDesign(Model):
     wall_description: str = Field(max_length=300)
     floor_texture: str = Field(max_length=100)
     wall_texture: str = Field(max_length=100)
-    objects: list[ObjectSpec] = Field(min_length=1, max_length=8)
+    objects: list[ObjectSpec] = Field(default_factory=list, max_length=8)
 
-
-def default_brief(category, ordinal, seed):
-    # Offline fixtures exercise the compiler, not semantic intelligence.
-    zones = [
-        dict(
-            name=f"{category} area {i + 1}",
-            purpose=f"A distinct part of {category}.",
-            enclosure="open" if i == 0 else "building",
-            floors=1,
-            width=10 + stable_seed(seed, i) % 5,
-            depth=12,
-            floor_height=4.2,
-            ground=["stone", "wood"][i],
-            wall="plaster",
-            palette=[f"{category} focal object", "seating"],
-        )
-        for i in range(2)
-    ]
-    return dict(
-        title=f"{category.title()} — {ordinal + 1}",
-        concept=f"A varied interpretation of {category}.",
-        family=category,
-        composition=["campus", "linear", "staggered"][ordinal % 3],
-        environment="Site-specific surroundings",
-        lighting="daylight",
-        weather="Clear air",
-        terrain="grass",
-        population=2,
-        population_story="Visitors exploring the scene.",
-        zones=zones,
-    )
+    @model_validator(mode="after")
+    def allocations(self, info: ValidationInfo):
+        context = info.context or {}
+        floors = context.get("floors")
+        if floors is not None and any(o.floor is not None and o.floor >= floors for o in self.objects):
+            raise ValueError("object floor must exist in its zone")
+        population = context.get("population")
+        actual = sum(o.count * ((floors or 1) if o.repeat_on_floors else 1) for o in self.objects if o.population)
+        if population is not None and actual != population:
+            raise ValueError("population objects must total the assigned population count across all floors")
+        return self
 
 
 def markdown(brief, designs):
@@ -119,10 +117,10 @@ def markdown(brief, designs):
         f"- Environment: {brief.environment}",
         f"- Terrain: {brief.terrain}",
         f"- Light: {brief.lighting}; weather: {brief.weather}",
-        f"- People: {brief.population}. {brief.population_story}",
+        f"- Population: {brief.population}. {brief.population_story}",
         "",
         "## Structure and circulation",
-        "Zones connect to a continuous 3 m promenade. Buildings have a front doorway, windows, an interior aisle and a stair bay when more than one floor is requested. Object placement preserves the aisle. Dimensions below are in meters.",
+        f"External circulation: {brief.circulation}. Building allocations reserve an entrance, interior aisle and floor connections. Openings and roofs follow each zone brief. Dimensions below are in meters.",
         "",
     ]
     for i, z in enumerate(brief.zones):
@@ -154,27 +152,43 @@ def markdown(brief, designs):
     return "\n".join(lines) + "\n"
 
 
-def design_scene(category, ordinal, seed, generation, llm, scene_id, path, log, previous_concepts=None):
+def design_scene(category, ordinal, seed, generation, llm, scene_id, path, log, previous_concepts=None, description=""):
     target = path / "brief.json"
     if target.exists():
         brief = SceneBrief.model_validate(read_json(target))
     else:
-        # No global neoclassical museum style is imposed on unrelated categories.
+        styles = generation.variations.architectural_styles
+        environments = generation.variations.environments
+        limits = generation.dimensions
+        if generation.bounding_space:
+            limits = (
+                tuple(min(a, b) for a, b in zip(limits, generation.bounding_space.size))
+                if limits
+                else generation.bounding_space.size
+            )
         brief = llm.request(
             SceneBrief,
             {
                 "task": "Design the overall scene, not individual objects yet.",
                 "category": category,
+                "description": description,
                 "category_is_authoritative": True,
                 "variation": ordinal,
                 "avoid_repeating": previous_concepts or [],
                 "seed": seed,
-                "composition_direction": "Invent a freeform composition with varied zone x/y positions and unequal dimensions; leave 3m gaps between zones. Avoid repeated grids.",
-                "instruction": "Expand the supplied category imaginatively, without imposing a building or museum template. It can describe any real or fictional place, object collection or environment. Specify 1-6 coherent zones, their physical dimensions, building floors, weather, lighting and population. Open zones have one floor; their floor_height is the available vertical extent and may reach 40m for tall terrain, vegetation or objects. Building floor heights must stay <=6m. For freeform composition give nonoverlapping x/y positions in meters with at least 3m gaps; vary orientation of the overall arrangement through positions and dimensions. Invent arbitrary category-appropriate object names in the palette; the next task designs each zone separately. Favor contrasting silhouettes and purposeful negative space.",
+                "style_preference": styles[ordinal % len(styles)] if styles else None,
+                "environment_preference": environments[(ordinal // max(1, len(styles))) % len(environments)]
+                if environments
+                else None,
+                "dimensions": generation.dimensions,
+                "bounding_space": generation.bounding_space.model_dump() if generation.bounding_space else None,
+                "composition_direction": "Choose composition for the requested purpose. Vary positions and dimensions when appropriate, and preserve intentional repetition requested by the input.",
+                "instruction": "Expand the supplied category and description imaginatively. Honor supplied preferences and site dimensions. Specify 1-6 coherent zones with dimensions, optional building floors, weather, lighting and population. Choose zero population when appropriate; inhabitants need not be human. Choose circulation none if paths are inappropriate. Open zones have one floor; floor_height is their vertical extent, up to 40m. Building floor heights must stay <=6m. Choose windows and roof for each building. Freeform zones need nonoverlapping x/y positions and 3m gaps. The site adds 7m margins to the maximum zone extents; fit within supplied dimensions including margins and 1m vertical clearance. Invent appropriate object names in the palette. Favor contrasting silhouettes and purposeful negative space.",
             },
             scene_id,
             "brief",
             mock=lambda: default_brief(category, ordinal, seed),
+            validation_context={"dimensions": limits},
         )
         for z in brief.zones:
             if z.enclosure == "open":
@@ -186,8 +200,12 @@ def design_scene(category, ordinal, seed, generation, llm, scene_id, path, log, 
         checkpoint = path / "zone-designs" / f"zone-{i + 1:02d}.json"
         log.event("design_zone", scene=scene_id, index=i + 1, total=len(brief.zones))
         if checkpoint.exists():
-            design = ZoneDesign.model_validate(read_json(checkpoint))
+            saved = read_json(checkpoint)
+            for obj in saved.get("objects", []):
+                obj.setdefault("repeat_on_floors", True)
+            design = ZoneDesign.model_validate(saved)
         else:
+            population = brief.population // len(brief.zones) + (i < brief.population % len(brief.zones))
 
             def mock():
                 return dict(
@@ -202,20 +220,9 @@ def design_scene(category, ordinal, seed, generation, llm, scene_id, path, log, 
                         dict(
                             name=k.title(),
                             kind=k,
-                            count=2,
-                            material={
-                                "tree": "leaf",
-                                "plant": "leaf",
-                                "rock": "stone",
-                                "tank": "glass",
-                                "fish": "accent",
-                                "voxel": "grass",
-                            }.get(k, "wood" if k in {"bench", "table", "shelf", "crate"} else "metal"),
-                            asset_query={
-                                "tree": "pine tree",
-                                "person": "standing person",
-                                "sculpture": "statue bust",
-                            }.get(k, k),
+                            count=1 + stable_seed(seed, i, k) % 3,
+                            material=z.ground,
+                            asset_query=k,
                             detail=f"{k.title()} with varied proportions, visible detail and natural wear.",
                         )
                         for k in z.palette
@@ -228,49 +235,46 @@ def design_scene(category, ordinal, seed, generation, llm, scene_id, path, log, 
                     "task": "Detail only this zone. Do not redesign the whole site.",
                     "concept": brief.concept,
                     "family": brief.family,
+                    "seed": stable_seed(seed, "zone", i),
                     "zone": z.model_dump(mode="json"),
                     "lighting": brief.lighting,
+                    "population": {
+                        "count": population,
+                        "kind": brief.population_kind,
+                        "story": brief.population_story,
+                        "asset_query": brief.population_query,
+                    },
                     "neighbors": [n.name for n in brief.zones[max(0, i - 1) : i + 2] if n is not z],
-                    "instruction": "Specify objects, material finishes and short asset-search phrases. Object kinds are free-form names: later tasks find assets or design a geometry recipe for each. No executable code. Keep objects relevant to this zone palette. Give precise visual details and varied quantities.",
+                    "instruction": "Specify objects, material finishes and short asset-search phrases. Object kinds are free-form names; later tasks find assets or design geometry recipes. Give precise visual details, dimensions and varied quantities appropriate to the palette. Empty zones are allowed. Object count is the total across floors; use floor to target one floor, or repeat_on_floors only for intentional repetition. Include the assigned population as ordinary objects with population=true and appropriate dimensions, material, appearance and kind. Respect its count, including zero; do not assume human bodies. No executable code.",
                 },
                 scene_id,
                 f"zone-{i + 1:02d}",
                 mock=mock,
+                validation_context={"population": population, "floors": z.floors},
             )
-            people = brief.population // len(brief.zones) + (i < brief.population % len(brief.zones))
-            if people and not any(o.kind.lower() in {"person", "people", "human"} for o in design.objects):
-                design.objects.append(
-                    ObjectSpec(
-                        name="Inhabitants of the area",
-                        kind=brief.population_kind,
-                        count=people,
-                        material="fabric",
-                        asset_query=brief.population_query,
-                        detail=brief.population_story,
-                        width=0.65,
-                        depth=0.65,
-                        height=1.75,
-                    )
-                )
             write_json(checkpoint, design.model_dump(mode="json"))
         designs.append(design)
         atomic_write(path / "scene.md", markdown(brief, designs).encode())
     return brief, designs
 
 
+class SceneSummary(Model):
+    workflow: Literal["creative"] = "creative"
+    title: str
+    category: str
+    concept: str
+    environment: str
+    atmosphere: Literal["warm", "cool", "dramatic", "daylight"]
+    layout: str
+
+
 def compatibility_plan(brief, category):
-    return ScenePlan(
+    """Export/report metadata; content remains in the complete scene brief."""
+    return SceneSummary(
         title=brief.title,
         category=category,
-        style=brief.family[:60],
-        environment=brief.environment[:60],
-        collection="art",
+        concept=brief.concept,
+        environment=brief.environment,
+        layout=brief.composition,
         atmosphere={"night": "dramatic", "sunset": "warm", "overcast": "cool"}.get(brief.lighting, "daylight"),
-        columns=len(brief.zones),
-        rows=1,
-        room_width=12,
-        room_depth=12,
-        height=6,
-        accent=(0.2, 0.45, 0.5),
-        concept=brief.concept[:450],
     )

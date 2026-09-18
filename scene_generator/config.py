@@ -5,6 +5,7 @@ import yaml
 from pydantic import Field, field_validator, model_validator
 
 from .models import Bounds, Model, Vec3
+from .policy import ScenePolicy
 
 
 class Variations(Model):
@@ -65,7 +66,8 @@ class OutputConfig(Model):
 
 
 class Generation(Model):
-    workflow: Literal["creative", "legacy"] = "creative"
+    workflow: Literal["graph", "creative", "legacy"] = "graph"
+    policy: ScenePolicy = Field(default_factory=ScenePolicy)
     variations: Variations = Field(default_factory=Variations)
     frameworks: list[Literal["blender", "trimesh"]] = Field(default_factory=lambda: ["blender", "trimesh"])
     output: OutputConfig = Field(default_factory=OutputConfig)

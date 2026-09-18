@@ -40,6 +40,8 @@ class Bounds(Model):
 
 
 class Transform(Model):
+    contract_version: Literal[1, 2] = 1
+    affine_matrix: list[list[float]] | None = None
     translation: Vec3 = (0, 0, 0)
     # Contract v1 deliberately permits translation only: all boxes are exact AABBs.
     rotation: Vec3 = (0, 0, 0)
@@ -47,14 +49,35 @@ class Transform(Model):
 
     @model_validator(mode="after")
     def supported(self):
-        if self.rotation != (0, 0, 0) or self.scale != (1, 1, 1):
+        if self.affine_matrix is not None:
+            import numpy as np
+
+            a = np.asarray(self.affine_matrix)
+            if (
+                self.contract_version != 2
+                or a.shape != (4, 4)
+                or not np.isfinite(a).all()
+                or not np.allclose(a[3], [0, 0, 0, 1])
+                or abs(np.linalg.det(a[:3, :3])) < 1e-12
+            ):
+                raise ValueError("invalid affine frame")
+        if self.contract_version == 1 and (self.rotation != (0, 0, 0) or self.scale != (1, 1, 1)):
             raise ValueError("contract v1 supports translation-only transforms")
+        if any(x <= 0 for x in self.scale):
+            raise ValueError("transform scale must be positive")
         return self
 
     @property
     def matrix(self):
-        x, y, z = self.translation
-        return [[1, 0, 0, x], [0, 1, 0, y], [0, 0, 1, z], [0, 0, 0, 1]]
+        import numpy as np
+        from trimesh.transformations import euler_matrix
+
+        if self.affine_matrix is not None:
+            return self.affine_matrix
+        matrix = euler_matrix(*np.radians(self.rotation))
+        matrix[:3, :3] @= np.diag(self.scale)
+        matrix[:3, 3] = self.translation
+        return matrix.tolist()
 
 
 class Material(Model):
@@ -91,6 +114,9 @@ class Budget(Model):
 
 
 class Component(Model):
+    contract_version: Literal[1, 2] = 1
+    design_node_id: str | None = None
+    provenance: dict = Field(default_factory=dict)
     id: str
     name: str
     kind: str
@@ -104,6 +130,7 @@ class Component(Model):
     clearance: list[Bounds] = Field(default_factory=list)
     materials: list[Material] = Field(default_factory=list)
     generator: Literal[
+        "mesh",
         "group",
         "box",
         "cylinder",
@@ -134,6 +161,10 @@ class Component(Model):
 
     @property
     def world_bounds(self):
+        if self.contract_version == 2:
+            from .graph_spatial import transformed_bounds
+
+            return transformed_bounds(Bounds(max=self.bounds.size), self.world_transform.matrix)
         return Bounds(max=self.bounds.size).translated(self.world_transform.translation)
 
 

@@ -1,0 +1,20 @@
+scenes:
+  sci-fi: 1
+  futuristic-enviornment: 1
+generation:
+  workflow: graph
+  seed: 42
+  llm:
+    mode: live
+  frameworks: [trimesh]
+  assets:
+    mode: polyhaven
+    offline: false
+  output:
+    root: runs
+    format: glb
+  policy:
+    max_nodes: 2000
+    max_parts: 10000
+    max_triangles: 2000000
+    max_checkpoint_bytes: 8000000

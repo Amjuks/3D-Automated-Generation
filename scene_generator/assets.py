@@ -44,8 +44,14 @@ def select_assets(config, plan, scene_path, log, requests=None, seed=0):
                             **{k: v for k, v in request.items() if k in {"target_role", "target_material", "query"}},
                         }
                     )
-        for entry in entries:
+        local_bytes = 0
+        for entry in entries[: config.max_assets]:
             path = (config.local_catalog.parent / entry["path"]).resolve()
+            size = path.stat().st_size
+            if size > config.max_download_bytes or local_bytes + size > config.max_total_bytes:
+                errors.append({"id": entry.get("id"), "error": "local asset exceeds byte policy"})
+                continue
+            local_bytes += size
             if entry["type"] not in {"model", "texture", "hdri"}:
                 raise ValueError("local asset type must be model, texture or hdri")
             records.append(
@@ -191,6 +197,7 @@ def select_assets(config, plan, scene_path, log, requests=None, seed=0):
                 atomic_write(atlas, buffer.getvalue())
                 record["base_color_texture"] = str(atlas.resolve())
         record["triangles"] = len(mesh.faces)
+        record["source_extents"] = mesh.extents.tolist()
     records = [r for i, r in enumerate(records) if i not in rejected]
     if rejected:
         write_json(scene_path / "asset-errors.json", errors)

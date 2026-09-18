@@ -72,7 +72,11 @@ def asset_mesh(path, sha256):
 
 
 def generate(component):
-    if component.generator == "asset":
+    if component.generator == "mesh":
+        mesh = trimesh.Trimesh(
+            vertices=component.parameters["vertices"], faces=component.parameters["faces"], process=False
+        )
+    elif component.generator == "asset":
         mesh = asset_mesh(component.parameters["path"], component.parameters["sha256"]).copy()
         if component.parameters.get("up_axis") == "Y":
             mesh.apply_transform(trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0]))

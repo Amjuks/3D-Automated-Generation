@@ -1,10 +1,12 @@
 # Scene Generator
 
-A runnable Python pipeline that turns category counts into furnished, connected 3D scenes. It separates semantic design from seeded spatial allocation and geometry, checkpoints every component, and exports one GLB per scene.
+A resumable pipeline that turns natural-language concepts into structured spatial designs and exported 3D geometry. New configurations use a versioned design graph: regions, structures, terrain, openings, objects, materials, assets, cameras and lighting are optional design choices.
 
-Offline mode exercises the pipeline with placeholder design data; use live mode for semantic creativity. Live design uses an OpenAI-compatible endpoint; geometry remains procedural. Blender provides headless export, PBR materials, lighting and rendered previews. Trimesh provides a portable GLB fallback.
+Start with `python -m scene_generator generate --config examples/graph.yaml`. Its mock mode exercises planning, geometry, validation and resume with an abstract fixture. Set `generation.llm.mode: live` for semantic interpretation through your configured endpoint.
 
-**Current workflow:** category names are free-form. New runs expand each category into a written scene brief, individual zone designs, semantic asset requests and object-local geometry recipes. A shared spatial compiler assembles the result; it does not route every category into museum geometry. Existing checkpoints retain their legacy workflow.
+The graph workflow checkpoints nine planning stages and compilation/export, preserves local frames, derives bounds from the design, applies explicit technical policies, and reports unsupported operations and asset fallbacks. Read [the graph architecture, supported operations and current limits](docs/design-graph.md). Existing `creative` and `legacy` checkpoints remain compatible.
+
+The following zone-workflow documentation applies to `generation.workflow: creative`, retained for earlier runs.
 
 ## Creative scenes
 

@@ -30,7 +30,7 @@ def component_path(scene_path, node):
 def load_scene(scene_path):
     scene_path = Path(scene_path).resolve()
     manifest = read_json(scene_path / "scene.json")
-    if manifest.get("schema_version") != 1:
+    if manifest.get("schema_version") not in {1, 2}:
         raise ValueError("unsupported scene manifest version")
     nodes, paths = [], {}
     for relative in manifest["components"]:
@@ -196,6 +196,10 @@ class Pipeline:
             "UPDATE scenes SET status='running',started=COALESCE(started,?),ended=NULL,error=NULL WHERE id=?",
             (time.time(), sid),
         )
+        if self.generation.workflow == "graph":
+            from .graph_pipeline import process_graph
+
+            return process_graph(self, row, path)
         creative = self.generation.workflow == "creative"
         brief = designs = None
         requests = None
@@ -549,6 +553,10 @@ def _validate_project(path):
     from .config import Generation
 
     generation = Generation.model_validate(manifest["generation"])
+    if manifest.get("schema_version") == 2:
+        from .graph_pipeline import validate_graph_project
+
+        return validate_graph_project(path, nodes, paths, manifest)
     report = validate(
         nodes,
         manifest["connections"],
@@ -569,6 +577,10 @@ def _export_project(path, fmt):
     report = _validate_project(path)
     if not report.valid:
         raise RuntimeError("validation failed; repair with resume before exporting")
+    if manifest.get("schema_version") == 2:
+        from .graph_pipeline import export_graph_project
+
+        return export_graph_project(path, nodes, paths, manifest, generation, fmt)
     data = read_json(path / "plan.json")
     if data.get("workflow") == "creative":
         from .brief import SceneSummary

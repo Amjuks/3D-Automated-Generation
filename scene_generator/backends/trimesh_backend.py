@@ -36,9 +36,18 @@ class TrimeshBackend:
                 scene.graph.update(
                     frame_from=parent, frame_to=node.id, matrix=node.local_transform.matrix, geometry=meshes[key]
                 )
+        graph_render = options.get("graph_render")
+        if graph_render and graph_render["cameras"]:
+            from ..graph_render import camera_matrix
+
+            spec = graph_render["cameras"][0]
+            scene.camera = trimesh.scene.cameras.Camera(
+                name=spec["id"], resolution=[1440, 960], fov=[spec["fov"], spec["fov"] * 2 / 3]
+            )
+            scene.camera_transform = axis @ camera_matrix(spec["position"], spec["target"])
         fmt = destination.suffix.lstrip(".")
         if fmt == "glb":
-            data = scene.export(file_type="glb")
+            data = trimesh.exchange.gltf.export_glb(scene)
         else:
             data = scene.to_mesh().export(file_type=fmt)
         atomic_write(destination, data)

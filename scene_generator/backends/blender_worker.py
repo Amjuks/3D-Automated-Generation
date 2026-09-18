@@ -12,7 +12,7 @@ def main():
     import bmesh
     import bpy
     import numpy as np
-    from mathutils import Vector
+    from mathutils import Matrix, Vector
 
     job = json.loads(Path(sys.argv[sys.argv.index("--") + 1]).read_text())
     bpy.ops.object.select_all(action="SELECT")
@@ -87,8 +87,14 @@ def main():
         bpy.context.collection.objects.link(obj)
         if node["parent_id"]:
             obj.parent = objects[node["parent_id"]]
-        obj.location = node["local_transform"]["translation"]
+        if node.get("contract_version", 1) == 2:
+            obj.matrix_world = Matrix(node["world_transform"]["affine_matrix"])
+        else:
+            obj.location = node["local_transform"]["translation"]
         objects[node["id"]] = obj
+    if "graph_render" in job["options"]:
+        graph_finish(job, meshes, objects)
+        return
     scene = bpy.context.scene
     scene.unit_settings.system = "METRIC"
     scene.world.use_nodes = True
@@ -235,6 +241,78 @@ def main():
                 "limitations": ["HDRI affects preview lighting; glTF does not embed a world environment"],
             },
             indent=2,
+        )
+    )
+
+
+def graph_finish(job, meshes, objects):
+    import math
+
+    import bpy
+    from mathutils import Matrix, Vector
+
+    scene = bpy.context.scene
+    scene.unit_settings.system = "METRIC"
+    scene.world.use_nodes = True
+    background = scene.world.node_tree.nodes.get("Background")
+    background.inputs["Strength"].default_value = 0
+    render = job["options"]["graph_render"]
+    for spec in render["atmospheres"]:
+        background.inputs["Color"].default_value = (*spec["color"], 1)
+        background.inputs["Strength"].default_value = spec["intensity"]
+    for spec in render["lights"]:
+        data = bpy.data.lights.new(spec["id"], spec["light_type"])
+        data.energy = spec["intensity"]
+        data.color = spec["color"]
+        obj = bpy.data.objects.new(spec["id"], data)
+        scene.collection.objects.link(obj)
+        obj.matrix_world = Matrix(spec["matrix"])
+        obj.location = spec["position"]
+    for spec in render["cameras"]:
+        data = bpy.data.cameras.new(spec["id"])
+        data.angle = math.radians(spec["fov"])
+        obj = bpy.data.objects.new(spec["id"], data)
+        scene.collection.objects.link(obj)
+        obj.location = spec["position"]
+        obj.rotation_euler = (Vector(spec["target"]) - obj.location).to_track_quat("-Z", "Y").to_euler()
+        if scene.camera is None:
+            scene.camera = obj
+    destination = Path(job["destination"])
+    temp = destination.with_name(destination.stem + ".tmp" + destination.suffix)
+    if destination.suffix == ".glb":
+        bpy.ops.export_scene.gltf(
+            filepath=str(temp), export_format="GLB", export_yup=True, export_lights=True, export_cameras=True
+        )
+    elif destination.suffix == ".obj":
+        bpy.ops.wm.obj_export(filepath=str(temp), export_materials=False)
+    elif destination.suffix == ".ply":
+        bpy.ops.wm.ply_export(filepath=str(temp))
+    os.replace(temp, destination)
+    if job["options"].get("component_glbs"):
+        for node in job["nodes"]:
+            bpy.ops.object.select_all(action="DESELECT")
+            objects[node["id"]].select_set(True)
+            target = str(Path(job["geometry_paths"][node["id"]]).with_suffix(".glb"))
+            bpy.ops.export_scene.gltf(filepath=target, export_format="GLB", use_selection=True)
+    if job["options"].get("preview") and scene.camera:
+        scene.render.engine = "CYCLES"
+        scene.cycles.samples = job["options"]["preview_samples"]
+        scene.render.resolution_x = job["options"]["preview_width"]
+        scene.render.resolution_y = int(scene.render.resolution_x * 2 / 3)
+        scene.render.resolution_percentage = 100
+        scene.render.filepath = str(destination.with_suffix(".png"))
+        bpy.ops.render.render(write_still=True)
+    bpy.ops.wm.save_as_mainfile(filepath=str(destination.with_suffix(".blend")))
+    Path(job["report"]).write_text(
+        json.dumps(
+            {
+                "backend": "blender",
+                "version": bpy.app.version_string,
+                "unique_meshes": len(meshes),
+                "instances": len(job["geometry_paths"]),
+                "bytes": destination.stat().st_size,
+                "limitations": ["World atmosphere is saved in Blender; GLB does not embed it."],
+            }
         )
     )
 
